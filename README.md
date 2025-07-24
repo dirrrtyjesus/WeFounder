@@ -1,2 +1,2 @@
 # WeFounder
-The Temporal Capital Exchange 
+The Value Compostion Engine 
