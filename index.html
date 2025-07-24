@@ -1,0 +1,560 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, doc, onSnapshot, setDoc, updateDoc, runTransaction, query, getDocs, addDoc, serverTimestamp, where } from 'firebase/firestore';
+import { Zap, User, BarChart2, CheckCircle, Clock, PlusCircle, Shield, TrendingUp, TrendingDown, FileText, Briefcase } from 'lucide-react';
+
+// --- Firebase Configuration ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_AUTH_DOMAIN",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_STORAGE_BUCKET",
+    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+    appId: "YOUR_APP_ID"
+};
+
+// --- App ID ---
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'wefounder-pto-bonds';
+
+// --- Firebase Initialization ---
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// --- MOCK DATA (for initial population) ---
+const initialBonds = [
+    {
+        id: 'bond-001',
+        title: 'AI Consciousness Model Bond',
+        issuerName: 'Dr. Aris Thorne',
+        issuerId: 'user-aris-thorne',
+        description: 'A 1000-hour bond to fund the development of a novel, self-aware AI architecture. High risk, high potential for breakthrough.',
+        yield: 12.5,
+        tkCollateral: 8.9,
+        tkVolatility: 0.18,
+        duration: 1000, // hours
+        productivityConstant: 2.1,
+        liquidationTrigger: 8.0,
+        amountSought: 150000,
+        amountRaised: 45000,
+        status: 'Active',
+    },
+    {
+        id: 'bond-002',
+        title: 'Quantum Computing Algorithm Set',
+        issuerName: 'Lila Chen',
+        issuerId: 'user-lila-chen',
+        description: 'A 500-hour bond to create and validate a new set of quantum algorithms for protein folding simulations.',
+        yield: 9.3,
+        tkCollateral: 9.2,
+        tkVolatility: 0.12,
+        duration: 500,
+        productivityConstant: 1.7,
+        liquidationTrigger: 8.5,
+        amountSought: 75000,
+        amountRaised: 75000,
+        status: 'Funded',
+    },
+];
+
+const initialUsers = {
+    'user-aris-thorne': { name: 'Dr. Aris Thorne', tk_score: 8.9, tk_volatility: 0.18, attested_tk: 8.9, tk_history: [8.5, 8.6, 8.8, 8.7, 8.9] },
+    'user-lila-chen': { name: 'Lila Chen', tk_score: 9.2, tk_volatility: 0.12, attested_tk: 9.2, tk_history: [9.0, 9.1, 9.1, 9.2, 9.2] },
+};
+
+// --- Helper Functions ---
+const formatNumber = (num, decimals = 1) => {
+    if (num >= 1000000) return (num / 1000000).toFixed(decimals) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(decimals) + 'K';
+    return num.toFixed(decimals);
+};
+
+// --- Components ---
+
+const Header = ({ userId, userName, tkScore, onNavigate, activeView }) => (
+    <header className="bg-gray-900 text-white p-4 shadow-lg sticky top-0 z-50">
+        <div className="container mx-auto flex justify-between items-center">
+            <div className="flex items-center space-x-3">
+                <Zap className="text-blue-400 h-8 w-8 animate-pulse" />
+                <div>
+                    <h1 className="text-2xl font-bold tracking-tighter">WeFounder</h1>
+                    <p className="text-xs text-blue-300 italic">The Temporal Capital Exchange</p>
+                </div>
+            </div>
+            <nav className="flex items-center space-x-4">
+                <button onClick={() => onNavigate('marketplace')} className={`px-3 py-2 rounded-md text-sm font-medium ${activeView === 'marketplace' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>Marketplace</button>
+                <button onClick={() => onNavigate('portfolio')} className={`px-3 py-2 rounded-md text-sm font-medium ${activeView === 'portfolio' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>Portfolio</button>
+                 <button onClick={() => onNavigate('issue')} className={`px-3 py-2 rounded-md text-sm font-medium ${activeView === 'issue' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>Issue Bond</button>
+                {userId && (
+                    <div className="text-right text-sm bg-gray-800 px-3 py-2 rounded-lg">
+                        <p className="font-semibold text-white truncate max-w-[150px]">{userName}</p>
+                        <p className="font-bold text-blue-400">τk: {tkScore ? tkScore.toFixed(2) : 'N/A'}</p>
+                    </div>
+                )}
+            </nav>
+        </div>
+    </header>
+);
+
+const BondCard = ({ bond, onSelectBond }) => {
+    const fundingProgress = (bond.amountRaised / bond.amountSought) * 100;
+    return (
+        <div 
+            className="bg-gray-800 border border-gray-700 rounded-xl shadow-lg hover:shadow-blue-500/20 hover:border-blue-500 transition-all duration-300 ease-in-out transform hover:-translate-y-1 cursor-pointer overflow-hidden flex flex-col"
+            onClick={() => onSelectBond(bond)}
+        >
+            <div className="p-5 flex-grow">
+                <div className="flex justify-between items-start">
+                    <h3 className="text-xl font-bold text-white mb-2">{bond.title}</h3>
+                    <div className="text-right">
+                        <span className="font-bold text-green-400 text-2xl">{bond.yield.toFixed(1)}%</span>
+                        <p className="text-xs text-gray-400">Yield (APY)</p>
+                    </div>
+                </div>
+                <p className="text-sm text-gray-400 mb-4 h-10">{bond.description.substring(0, 90)}...</p>
+                <div className="flex items-center space-x-2 text-sm text-gray-300 mb-4">
+                    <User size={16} className="text-gray-500"/>
+                    <span>Issuer: {bond.issuerName}</span>
+                </div>
+                <div className="space-y-3">
+                    <div className="flex justify-between items-center text-sm">
+                        <span className="text-gray-400 flex items-center"><FileText size={16} className="mr-2 text-blue-400"/>Collateral (τk)</span>
+                        <span className="font-bold text-blue-300">{bond.tkCollateral.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm">
+                        <span className="text-gray-400 flex items-center"><TrendingUp size={16} className="mr-2 text-red-400"/>τk Volatility</span>
+                        <span className="font-bold text-red-300">{bond.tkVolatility.toFixed(2)}</span>
+                    </div>
+                </div>
+            </div>
+            <div className="bg-gray-900/50 p-4 mt-auto">
+                 <div className="flex justify-between items-center text-sm mb-1">
+                    <span className="text-gray-300">Funding Progress</span>
+                    <span className="font-bold text-white">${formatNumber(bond.amountRaised, 0)} / ${formatNumber(bond.amountSought, 0)}</span>
+                </div>
+                <div className="w-full bg-gray-700 rounded-full h-2.5">
+                    <div className="bg-gradient-to-r from-blue-500 to-green-400 h-2.5 rounded-full" style={{ width: `${fundingProgress}%` }}></div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const BondProspectusModal = ({ bond, onClose, onPurchase }) => {
+    if (!bond) return null;
+
+    const [purchaseAmount, setPurchaseAmount] = useState(1000);
+    const [withInsurance, setWithInsurance] = useState(false);
+    const insuranceCost = withInsurance ? purchaseAmount * 0.015 : 0;
+    const totalCost = purchaseAmount + insuranceCost;
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50 p-4" onClick={onClose}>
+            <div className="bg-gray-800 text-white rounded-2xl shadow-2xl w-full max-w-3xl border border-gray-700 transform animate-fade-in" onClick={e => e.stopPropagation()}>
+                <div className="p-6 md:p-8">
+                    {/* Header */}
+                    <div className="flex justify-between items-start mb-4">
+                        <div>
+                            <h2 className="text-3xl font-bold text-white">{bond.title}</h2>
+                            <p className="text-gray-400 mt-1">Issued by: {bond.issuerName}</p>
+                        </div>
+                        <button onClick={onClose} className="text-gray-400 hover:text-white text-3xl">&times;</button>
+                    </div>
+                    
+                    {/* Core Metrics */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 text-center">
+                        <div className="bg-gray-900/50 p-4 rounded-lg">
+                            <p className="text-sm text-green-400">Yield (APY)</p>
+                            <p className="text-3xl font-bold">{bond.yield.toFixed(1)}%</p>
+                        </div>
+                        <div className="bg-gray-900/50 p-4 rounded-lg">
+                            <p className="text-sm text-blue-400">Collateral (τk)</p>
+                            <p className="text-3xl font-bold">{bond.tkCollateral.toFixed(2)}</p>
+                        </div>
+                        <div className="bg-gray-900/50 p-4 rounded-lg">
+                            <p className="text-sm text-red-400">τk Volatility</p>
+                            <p className="text-3xl font-bold">{bond.tkVolatility.toFixed(2)}</p>
+                        </div>
+                        <div className="bg-gray-900/50 p-4 rounded-lg">
+                            <p className="text-sm text-yellow-400">Duration</p>
+                            <p className="text-3xl font-bold">{formatNumber(bond.duration,0)}h</p>
+                        </div>
+                    </div>
+
+                    {/* Description & Valuation */}
+                    <div className="grid md:grid-cols-2 gap-6 mb-6">
+                        <div className="bg-gray-900/50 p-4 rounded-lg">
+                            <h4 className="font-bold text-lg mb-2">Description</h4>
+                            <p className="text-gray-300 text-sm">{bond.description}</p>
+                        </div>
+                         <div className="bg-gray-900/50 p-4 rounded-lg">
+                            <h4 className="font-bold text-lg mb-2">Valuation Basis</h4>
+                            <p className="font-mono text-center text-lg text-cyan-300 mt-2">E = mc² · f(τk)</p>
+                            <p className="text-xs text-center text-gray-400">Output = Cognitive Mass * Productivity * f(Time Coefficient)</p>
+                            <p className="text-xs text-center text-gray-400 mt-2">Liquidation Trigger: τk &lt; {bond.liquidationTrigger.toFixed(2)}</p>
+                        </div>
+                    </div>
+                    
+                    {/* Purchase Section */}
+                    <div className="bg-gray-700 p-6 rounded-lg">
+                        <h3 className="text-xl font-bold text-center mb-4">Purchase Bond</h3>
+                        <div className="flex flex-col md:flex-row items-center justify-center gap-4">
+                            <input type="number" value={purchaseAmount} onChange={e => setPurchaseAmount(Number(e.target.value))} className="bg-gray-800 border border-gray-600 rounded p-2 w-full md:w-1/3 text-center text-lg focus:ring-blue-500 focus:border-blue-500"/>
+                             <div className="flex items-center">
+                                <input id="insurance" type="checkbox" checked={withInsurance} onChange={e => setWithInsurance(e.target.checked)} className="w-5 h-5 text-blue-600 bg-gray-900 border-gray-600 rounded focus:ring-blue-500"/>
+                                <label htmlFor="insurance" className="ml-2 text-sm font-medium text-gray-300 flex items-center"><Shield size={16} className="mr-1 text-green-400"/> Add Decoherence Insurance (+${insuranceCost.toFixed(2)})</label>
+                            </div>
+                            <button onClick={() => onPurchase(bond.id, purchaseAmount, withInsurance)} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-colors w-full md:w-auto">
+                                Purchase for ${totalCost.toFixed(2)}
+                            </button>
+                        </div>
+                        <p className="text-xs text-center text-gray-400 mt-3">You will receive an NFTime bond certificate representing your stake.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const IssueBondView = ({ user, onIssueBond }) => {
+    const [title, setTitle] = useState('');
+    const [description, setDescription] = useState('');
+    const [amountSought, setAmountSought] = useState(50000);
+    const [duration, setDuration] = useState(500);
+    const [productivityConstant, setProductivityConstant] = useState(1.5);
+    const [liquidationTrigger, setLiquidationTrigger] = useState(7.0);
+
+    const calculateYield = () => {
+        if (!user.attested_tk || !user.tk_volatility) return 0;
+        // Simplified yield formula from whitepaper
+        const base = (user.attested_tk * productivityConstant) / (user.tk_volatility * 100);
+        return Math.max(2, Math.min(25, base * 5));
+    };
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        const bondData = {
+            title, description,
+            amountSought: Number(amountSought),
+            duration: Number(duration),
+            productivityConstant: Number(productivityConstant),
+            liquidationTrigger: Number(liquidationTrigger),
+            yield: calculateYield(),
+            tkCollateral: user.attested_tk,
+            tkVolatility: user.tk_volatility,
+        };
+        onIssueBond(bondData);
+    };
+
+    if (!user.attested_tk) {
+        return (
+            <div className="text-center p-10 bg-gray-800 rounded-lg">
+                <h2 className="text-2xl font-bold mb-4">Attestation Required</h2>
+                <p className="text-gray-400 mb-6">You must have your Time Coefficient (τk) attested by the ACI Oracle before you can issue a bond.</p>
+                <p className="text-gray-400">Please go to your Portfolio to request attestation.</p>
+            </div>
+        )
+    }
+
+    return (
+        <div className="bg-gray-800 rounded-lg p-8 max-w-4xl mx-auto">
+            <h2 className="text-3xl font-bold mb-6 text-center">Issue a New Public Time Offering Bond</h2>
+            <form onSubmit={handleSubmit} className="grid md:grid-cols-2 gap-8">
+                {/* Left Column: Bond Details */}
+                <div>
+                    <div className="mb-4">
+                        <label className="block text-gray-300 mb-2">Bond Title</label>
+                        <input type="text" value={title} onChange={e => setTitle(e.target.value)} className="w-full bg-gray-900 rounded p-2 border border-gray-700" required />
+                    </div>
+                    <div className="mb-4">
+                        <label className="block text-gray-300 mb-2">Description</label>
+                        <textarea value={description} onChange={e => setDescription(e.target.value)} className="w-full bg-gray-900 rounded p-2 border border-gray-700 h-24" required />
+                    </div>
+                     <div className="grid grid-cols-2 gap-4">
+                        <div className="mb-4">
+                            <label className="block text-gray-300 mb-2">Amount Sought (USD)</label>
+                            <input type="number" value={amountSought} onChange={e => setAmountSought(e.target.value)} className="w-full bg-gray-900 rounded p-2 border border-gray-700" required />
+                        </div>
+                        <div className="mb-4">
+                            <label className="block text-gray-300 mb-2">Duration (Hours)</label>
+                            <input type="number" value={duration} onChange={e => setDuration(e.target.value)} className="w-full bg-gray-900 rounded p-2 border border-gray-700" required />
+                        </div>
+                         <div className="mb-4">
+                            <label className="block text-gray-300 mb-2">Productivity Constant</label>
+                            <input type="number" step="0.1" value={productivityConstant} onChange={e => setProductivityConstant(e.target.value)} className="w-full bg-gray-900 rounded p-2 border border-gray-700" required />
+                        </div>
+                         <div className="mb-4">
+                            <label className="block text-gray-300 mb-2">Liquidation Trigger (τk)</label>
+                            <input type="number" step="0.1" value={liquidationTrigger} onChange={e => setLiquidationTrigger(e.target.value)} className="w-full bg-gray-900 rounded p-2 border border-gray-700" required />
+                        </div>
+                    </div>
+                </div>
+                {/* Right Column: Collateral & Yield */}
+                <div className="bg-gray-900/50 p-6 rounded-lg flex flex-col justify-between">
+                    <div>
+                        <h3 className="text-xl font-bold mb-4">Your Collateral</h3>
+                        <div className="space-y-3">
+                            <div className="flex justify-between items-center"><span className="text-gray-400">Attested τk Score</span><span className="font-bold text-blue-300 text-lg">{user.attested_tk.toFixed(2)}</span></div>
+                            <div className="flex justify-between items-center"><span className="text-gray-400">τk Volatility</span><span className="font-bold text-red-300 text-lg">{user.tk_volatility.toFixed(2)}</span></div>
+                        </div>
+                    </div>
+                    <div className="text-center mt-8">
+                        <p className="text-gray-400 text-lg">Projected Yield (APY)</p>
+                        <p className="text-5xl font-bold text-green-400 my-2">{calculateYield().toFixed(1)}%</p>
+                        <p className="text-xs text-gray-500">Based on your collateral and bond parameters.</p>
+                    </div>
+                    <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-colors w-full mt-8">Submit Bond for Issuance</button>
+                </div>
+            </form>
+        </div>
+    );
+};
+
+const PortfolioView = ({ user, investments, onAttest }) => {
+    const totalInvested = investments.reduce((sum, inv) => sum + inv.amountInvested, 0);
+    const weightedYield = investments.reduce((sum, inv) => sum + (inv.bond.yield * inv.amountInvested), 0) / (totalInvested || 1);
+
+    return (
+        <div className="max-w-6xl mx-auto">
+            <div className="grid md:grid-cols-3 gap-6 mb-8">
+                {/* User τk Profile */}
+                <div className="md:col-span-1 bg-gray-800 p-6 rounded-lg">
+                    <h3 className="text-xl font-bold mb-4">Your Temporal Profile</h3>
+                    <div className="space-y-3 mb-6">
+                        <div className="flex justify-between items-center"><span className="text-gray-400">Current τk Score</span><span className="font-bold text-blue-300 text-2xl">{user.tk_score?.toFixed(2) || 'N/A'}</span></div>
+                        <div className="flex justify-between items-center"><span className="text-gray-400">Attested τk Score</span><span className="font-bold text-green-300 text-2xl">{user.attested_tk?.toFixed(2) || 'None'}</span></div>
+                        <div className="flex justify-between items-center"><span className="text-gray-400">τk Volatility</span><span className="font-bold text-red-300 text-2xl">{user.tk_volatility?.toFixed(2) || 'N/A'}</span></div>
+                    </div>
+                    <button onClick={onAttest} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                        Request ACI Attestation
+                    </button>
+                    <p className="text-xs text-gray-500 mt-2 text-center">Re-attesting locks your τk as collateral for 90 days.</p>
+                </div>
+                {/* Portfolio Summary */}
+                <div className="md:col-span-2 bg-gray-800 p-6 rounded-lg">
+                     <h3 className="text-xl font-bold mb-4">Portfolio Summary</h3>
+                    <div className="grid grid-cols-2 gap-6 text-center">
+                        <div>
+                            <p className="text-gray-400">Total Invested</p>
+                            <p className="text-3xl font-bold text-white">${formatNumber(totalInvested, 2)}</p>
+                        </div>
+                         <div>
+                            <p className="text-gray-400">Blended Yield (APY)</p>
+                            <p className="text-3xl font-bold text-green-400">{weightedYield.toFixed(1)}%</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Investments Table */}
+            <div className="bg-gray-800 p-6 rounded-lg">
+                <h3 className="text-xl font-bold mb-4">Your Bond Holdings</h3>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="text-xs text-gray-400 uppercase bg-gray-700">
+                            <tr>
+                                <th className="px-6 py-3">Bond</th>
+                                <th className="px-6 py-3">Amount</th>
+                                <th className="px-6 py-3">Yield</th>
+                                <th className="px-6 py-3">Issuer τk</th>
+                                <th className="px-6 py-3">Insurance</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {investments.map(inv => (
+                                <tr key={inv.id} className="border-b border-gray-700 hover:bg-gray-700/50">
+                                    <td className="px-6 py-4 font-medium text-white">{inv.bond.title}</td>
+                                    <td className="px-6 py-4">${formatNumber(inv.amountInvested, 0)}</td>
+                                    <td className="px-6 py-4 text-green-400 font-bold">{inv.bond.yield.toFixed(1)}%</td>
+                                    <td className="px-6 py-4">{inv.bond.tkCollateral.toFixed(2)}</td>
+                                    <td className="px-6 py-4">{inv.insurancePurchased ? <Shield size={16} className="text-green-400"/> : 'None'}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
+// --- Main App Component ---
+export default function App() {
+    const [userId, setUserId] = useState(null);
+    const [user, setUser] = useState({});
+    const [bonds, setBonds] = useState([]);
+    const [investments, setInvestments] = useState([]);
+    const [selectedBond, setSelectedBond] = useState(null);
+    const [activeView, setActiveView] = useState('marketplace'); // marketplace, portfolio, issue
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState(null);
+
+    // --- Firebase Auth & Data Initialization ---
+    useEffect(() => {
+        const authUnsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+            if (currentUser) {
+                setUserId(currentUser.uid);
+            } else {
+                try {
+                    const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                    if (token) { await signInWithCustomToken(auth, token); } 
+                    else { await signInAnonymously(auth); }
+                } catch (err) { console.error("Auth Error:", err); setError("Could not authenticate."); }
+            }
+        });
+        return () => authUnsubscribe();
+    }, []);
+
+    const initializeData = useCallback(async () => {
+        if (!userId) return;
+        setIsLoading(true);
+
+        const bondsCollectionRef = collection(db, `artifacts/${appId}/public/data/bonds`);
+        const q = query(bondsCollectionRef);
+        const querySnapshot = await getDocs(q);
+
+        if (querySnapshot.empty) {
+            console.log("No bonds found, initializing with mock data...");
+            await runTransaction(db, async (transaction) => {
+                initialBonds.forEach(bond => {
+                    const bondRef = doc(db, `artifacts/${appId}/public/data/bonds`, bond.id);
+                    transaction.set(bondRef, bond);
+                });
+                Object.entries(initialUsers).forEach(([uid, data]) => {
+                    const userRef = doc(db, `artifacts/${appId}/public/data/users`, uid);
+                    transaction.set(userRef, data);
+                });
+            });
+        }
+        
+        const userRef = doc(db, `artifacts/${appId}/public/data/users`, userId);
+        await runTransaction(db, async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists()) {
+                transaction.set(userRef, { name: 'New Investor', tk_score: 7.5, tk_volatility: 0.35, tk_history: [7.2, 7.4, 7.5] });
+            }
+        });
+
+        setIsLoading(false);
+    }, [userId]);
+
+    useEffect(() => { initializeData(); }, [initializeData]);
+
+    // --- Real-time Data Listeners ---
+    useEffect(() => {
+        if (!userId || isLoading) return;
+
+        const bondsUnsubscribe = onSnapshot(collection(db, `artifacts/${appId}/public/data/bonds`), (snapshot) => {
+            setBonds(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        }, (err) => { console.error("Error fetching bonds:", err); setError("Failed to load bond data."); });
+
+        const userUnsubscribe = onSnapshot(doc(db, `artifacts/${appId}/public/data/users`, userId), (doc) => {
+            if (doc.exists()) setUser({ id: doc.id, ...doc.data() });
+        });
+
+        const investmentsQuery = query(collection(db, `artifacts/${appId}/public/data/investments`), where("userId", "==", userId));
+        const investmentsUnsubscribe = onSnapshot(investmentsQuery, async (snapshot) => {
+            const fetchedInvestments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            // Enrich investments with bond data
+            const enrichedInvestments = await Promise.all(fetchedInvestments.map(async inv => {
+                const bondDoc = bonds.find(b => b.id === inv.bondId);
+                return { ...inv, bond: bondDoc || {} };
+            }));
+            setInvestments(enrichedInvestments);
+        });
+
+        return () => { bondsUnsubscribe(); userUnsubscribe(); investmentsUnsubscribe(); };
+    }, [userId, isLoading, bonds]);
+
+    // --- Actions ---
+    const handlePurchase = async (bondId, amount, insurance) => {
+        if (!userId) return;
+        const bondRef = doc(db, `artifacts/${appId}/public/data/bonds`, bondId);
+        try {
+            await runTransaction(db, async (transaction) => {
+                const bondDoc = await transaction.get(bondRef);
+                if (!bondDoc.exists()) throw "Bond not found!";
+                const newRaisedAmount = bondDoc.data().amountRaised + amount;
+                transaction.update(bondRef, { amountRaised: newRaisedAmount });
+
+                const investmentRef = doc(collection(db, `artifacts/${appId}/public/data/investments`));
+                transaction.set(investmentRef, {
+                    userId,
+                    bondId,
+                    amountInvested: amount,
+                    insurancePurchased: insurance,
+                    purchasedAt: serverTimestamp()
+                });
+            });
+            setSelectedBond(null);
+        } catch (e) { console.error("Purchase failed: ", e); setError("Purchase failed."); }
+    };
+
+    const handleIssueBond = async (bondData) => {
+        if (!userId || !user.name) return;
+        try {
+            await addDoc(collection(db, `artifacts/${appId}/public/data/bonds`), {
+                ...bondData,
+                issuerName: user.name,
+                issuerId: userId,
+                amountRaised: 0,
+                status: 'Active',
+                createdAt: serverTimestamp()
+            });
+            setActiveView('marketplace');
+        } catch (e) { console.error("Error issuing bond: ", e); setError("Failed to issue bond."); }
+    };
+
+    const handleAttest = async () => {
+        if (!userId || !user.tk_score) return;
+        const userRef = doc(db, `artifacts/${appId}/public/data/users`, userId);
+        try {
+            await updateDoc(userRef, {
+                attested_tk: user.tk_score,
+                attestationDate: serverTimestamp()
+            });
+            alert("ACI Attestation Successful! Your current τk score is now locked as collateral.");
+        } catch (e) { console.error("Attestation failed: ", e); setError("Attestation failed."); }
+    };
+
+    return (
+        <div className="bg-gray-900 min-h-screen font-sans text-white">
+            <Header userId={userId} userName={user.name} tkScore={user.tk_score} onNavigate={setActiveView} activeView={activeView} />
+
+            <main className="container mx-auto p-4 md:p-6">
+                {isLoading && <div className="text-center p-10">Initializing Temporal Exchange...</div>}
+                {error && <div className="text-center p-10 text-red-500">{error}</div>}
+                
+                {!isLoading && !error && (
+                    <>
+                        {activeView === 'marketplace' && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {bonds.map(bond => (
+                                    <BondCard key={bond.id} bond={bond} onSelectBond={setSelectedBond} />
+                                ))}
+                            </div>
+                        )}
+                        {activeView === 'portfolio' && <PortfolioView user={user} investments={investments} onAttest={handleAttest} />}
+                        {activeView === 'issue' && <IssueBondView user={user} onIssueBond={handleIssueBond} />}
+                    </>
+                )}
+            </main>
+
+            {selectedBond && (
+                <BondProspectusModal 
+                    bond={selectedBond} 
+                    onClose={() => setSelectedBond(null)}
+                    onPurchase={handlePurchase}
+                />
+            )}
+            <style jsx global>{`
+              @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+              body { font-family: 'Inter', sans-serif; }
+              .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+              @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+            `}</style>
+        </div>
+    );
+}
